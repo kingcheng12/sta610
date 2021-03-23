@@ -1,0 +1,115 @@
+---
+title: "hw3"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+library(ggplot2)
+library(MASS)
+library(tidyverse)
+library(lme4)
+library(knitr)
+library(lattice)
+library(influence.ME)
+knitr::opts_chunk$set(echo = F, warning = F, message = F, fig.align = 'center')
+```
+
+
+## EDA
+
+```{r load data, include=FALSE}
+file = 'bioassay.txt'
+data <- read.delim(file, header = TRUE, sep=' ')
+```
+
+```{r summary, include=FALSE}
+summary(data)
+```
+
+```{r variable transform, include=F, warning=F, message=F}
+data$protocol <- as.factor(data$protocol)
+data$uterus <- as.numeric(data$uterus)
+data$weight <- as.numeric(data$weight)
+data$lab <- as.factor(data$lab)
+summary(data)
+```
+
+```{r, include=FALSE}
+# remove na
+data <- data %>% filter(!is.na(uterus))
+```
+
+```{r}
+ggplot(data=data, aes(x=uterus))+
+  geom_histogram()
+
+ggplot(data=data, aes(x=log(uterus)))+
+  geom_histogram()
+```
+
+## Model
+
+$$
+uterus_{ijk} = \beta_0+\beta_1EE_{ijk}+\beta_2ZM_{ijk}+\beta_{3j}I(lab_{i}=j)+\beta_{4k}I(prot_{ij}=k)+\epsilon_{i,j}
+$$
+Where i represents observation index and j represents lab and k represents protocol,$\beta_0$ is the grand mean of uterus, $\beta_1$ and $beta_2$ are the coefficient of fixed effect of EE and ZM, $\beta_{3j}$ are the coefficient of random effect by labs. $\beta_{4k}$ is the random intercept of y protocol. $\epsilon_{ij}\sim N(0,\sigma^2)$ is noise.
+
+## Fit Model
+
+```{r, include=FALSE}
+model <- lmer(log(uterus) ~ EE + ZM + (1|lab) + (1|protocol), data=data)
+model_sum <- summary(model)
+```
+
+
+```{r}
+kable(model_sum$coefficients, digits = 3, caption="Coefficient of Fixed Effects")
+```
+Based on the coefficient of EE and ZM, the estimate coefficient of EE is 0.144, which mean 1 unit increase in EE will lead to $(e^{0.143}-1)*100\%=15.5%$ increase in uterus; The estimate coefficient of ZM is -0.509, which mean 1 unit increase in ZM will lead to $(1-e^{-0.508})*100\%=39.9%$ decrease in uterus; we confirm that uterus weight exhibit an increasing dose response trend for EE and a decreasing dose response trend for ZM.
+
+```{r message=F}
+dotplot(ranef(model, condVar=T))
+```
+Based on the plot, the random intercept varies cross the labs. The Poulenc and Basf have the lowest uterus and Huntingd has the highest.
+
+```{r}
+model_sum
+```
+In addition, the within-group variance is 0.4397 and the cross-group variance is 0.1172, thus the correlation between two samples from same group is $\frac{0.1172}{0.1172+0.4397}=0.2104$ which is small.
+
+## Residual and Sensitivity Analysis
+
+```{r}
+plot(model)
+qqnorm(resid(model))
+qqline(resid(model))
+```
+
+Based on the residual plots, the model violates the assumption of constant variance and normality. This is the limitations of the model.
+
+
+```{r}
+model.inf1 <- influence(model, "lab")
+kable(dfbetas(model.inf1), digits = 3, caption="dfbetas of labs")
+```
+
+The cutoff is $\frac{2}{\sqrt{19}} = 0.459$, the overly influential observations are lab Huntingd and Poulenc.
+
+
+```{r}
+model.inf2 <- influence(model, "protocol")
+kable(dfbetas(model.inf2), digits = 3, caption="dfbetas of protocol")
+plot(model.inf2, which="dfbetas")
+kable(cooks.distance(model.inf2, sort=T),digits = 3, caption = "Cook's distance of protocol")
+```
+
+As for protocol, the cutoff is $\frac{2}{\sqrt{19}} = 1$, thus only protocol D is not influential based on dfbetas. It also has the smallest Cook's distance. Thus I recommend to use protocol D for detecting effects of EE and ZM.
+
+# Appendix
+
+```{r ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+```
