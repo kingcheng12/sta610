@@ -15,7 +15,12 @@ library(lme4)
 library(knitr)
 library(lattice)
 library(influence.ME)
-knitr::opts_chunk$set(echo = F, warning = F, message = F, fig.align = 'center')
+library(gridExtra)
+library(hrbrthemes)
+library(viridis)
+library(forcats)
+library(GGally)
+knitr::opts_chunk$set(echo = F, warning = F, message = F, fig.align = 'center', fig.width=6, fig.height=2)
 ```
 
 
@@ -30,7 +35,7 @@ data <- read.delim(file, header = TRUE, sep=' ')
 summary(data)
 ```
 
-```{r variable transform, include=F, warning=F, message=F}
+```{r variable transform, include=F}
 data$protocol <- as.factor(data$protocol)
 data$uterus <- as.numeric(data$uterus)
 data$weight <- as.numeric(data$weight)
@@ -43,71 +48,145 @@ summary(data)
 data <- data %>% filter(!is.na(uterus))
 ```
 
-```{r}
-ggplot(data=data, aes(x=uterus))+
+```{r, fig.width=6, fig.height=2}
+p1 <- ggplot(data=data, aes(x=uterus))+
   geom_histogram()
 
-ggplot(data=data, aes(x=log(uterus)))+
+p2 <- ggplot(data=data, aes(x=log(uterus)))+
   geom_histogram()
+
+grid.arrange(p1, p2, nrow = 1);
 ```
+
+It turns out that we have a bimodal distribution for log(uterus). This is probably because of the mature status of the rats, in particular, due to protocol.
+
+```{r}
+data %>%
+  mutate(text = fct_reorder(protocol, log(uterus))) %>%
+  ggplot( aes(x=log(uterus), color=protocol, fill=protocol)) +
+    geom_histogram(alpha=0.6) +
+    xlab("") +
+    ylab("count") +
+    facet_wrap(~text);
+```
+For this reason, protocol is suggested to be a random effect.
+
+```{r, fig.width=6, fig.height=2}
+p3 <- ggplot(data, aes(x=weight, y=log(uterus)))+
+  geom_point()
+
+p4 <- ggplot(data, aes(x=as.factor(EE), y=log(uterus)))+
+  geom_boxplot()
+
+p5 <- ggplot(data, aes(x=as.factor(ZM), y=log(uterus)))+
+  geom_boxplot()
+grid.arrange(p3, p4,p5, nrow = 1);
+```
+
+The above show the relationship of log(uterus) vs. weight, EE and ZM. We observe that weight seems to correlate to log(uterus) with 2 clear clusters, however, weight should be correlated to protocol since an immature rat tends to weight less and have lighter uterus.
+
+The EE are positively correlated to uterus and ZM seems to have an upside-down U shape relation to uterus.
 
 ## Model
 
+For this part, I will create a basic model that answers the research question, and then create the final model by adding extra features to the model based on performance. The basic models are as below:
+
 $$
-uterus_{ijk} = \beta_0+\beta_1EE_{ijk}+\beta_2ZM_{ijk}+\beta_{3j}I(lab_{i}=j)+\beta_{4k}I(prot_{ij}=k)+\epsilon_{i,j}
+log(uterus_{ijk}) = \beta_0+\beta_{1k}EE_{ijk}+\beta_{2k}ZM_{ijk}
 $$
-Where i represents observation index and j represents lab and k represents protocol,$\beta_0$ is the grand mean of uterus, $\beta_1$ and $beta_2$ are the coefficient of fixed effect of EE and ZM, $\beta_{3j}$ are the coefficient of random effect by labs. $\beta_{4k}$ is the random intercept of y protocol. $\epsilon_{ij}\sim N(0,\sigma^2)$ is noise.
+$$
+\beta_0=b_0+b_{0j}+b_{0k}
+$$
+$$
+\beta_{1k} = b_1+b_{1k}
+$$
+$$
+\beta_{2k} = b_2+b_{2k}
+$$
+
+Where i represents observation index and j represents lab and k represents protocol. $b_0$ is the grand mean of log(uterus), $b_{0j}$ and $b_{0k}$ are random intercept of lab and protocol respectively. $b_1$ and $b_2$ are fixed intercept of EE and ZM. $b_{1k}$ and $b_{2k}$ are the random slopes of EE and ZM with respected to protocol.
+
+In this way, $b_1$ and $b_2$ are used for answering question 1; $b_{0j}$ is for question 2 and 
+$b_{1k}$ and $b_{2k}$ are for question 3.
 
 ## Fit Model
 
+I have tried 4 models and I will choose the best model based on BIC.
+
 ```{r, include=FALSE}
-model <- lmer(log(uterus) ~ EE + ZM + (1|lab) + (1|protocol), data=data)
-model_sum <- summary(model)
+m1 <- lmer(log(uterus) ~ 1 + EE + ZM + (1|lab) + (EE + ZM|protocol), data=data)
+m2 <- lmer(log(uterus) ~ 1 + EE + ZM + weight + (1|lab) + (EE + ZM|protocol), data=data)
+m3 <- lmer(log(uterus) ~ 1 + EE * ZM + weight + (1|lab) + (EE + ZM|protocol), data=data)
+m4 <- lmer(log(uterus) ~ 1 + EE * ZM + weight + (1|lab) + (EE * ZM|protocol), data=data)
 ```
+
+```{r, include=FALSE}
+anova(m1, m2)
+anova(m1, m3)
+anova(m1, m4)
+```
+I find that the base model 'm1' (the model is specified above) has the lowest BIC at 3262 and therefore it is the best model. Analysis will be based on 'm1' later.
 
 
 ```{r}
-kable(model_sum$coefficients, digits = 3, caption="Coefficient of Fixed Effects")
+m1_summary = summary(m1)
+kable(m1_summary$coefficients, digits = 3, caption="Coefficient of Fixed Effects")
 ```
-Based on the coefficient of EE and ZM, the estimate coefficient of EE is 0.144, which mean 1 unit increase in EE will lead to $(e^{0.143}-1)*100\%=15.5%$ increase in uterus; The estimate coefficient of ZM is -0.509, which mean 1 unit increase in ZM will lead to $(1-e^{-0.508})*100\%=39.9%$ decrease in uterus; we confirm that uterus weight exhibit an increasing dose response trend for EE and a decreasing dose response trend for ZM.
 
-```{r message=F}
-dotplot(ranef(model, condVar=T))
-```
-Based on the plot, the random intercept varies cross the labs. The Poulenc and Basf have the lowest uterus and Huntingd has the highest.
+Based on the coefficient of EE and ZM, the estimate fixed intercept of EE is 0.138, which mean 1 unit increase in EE will lead to $(e^{0.138}-1)*100\%=14.8%$ increase in uterus; The estimate coefficient of ZM is -0.569, which mean 1 unit increase in ZM will lead to $(1-e^{-0.569})*100\%=43.3%$ decrease in uterus; we confirm that uterus weight exhibit an increasing dose response trend for EE and a decreasing dose response trend for ZM. This answers question 1.
 
-```{r}
-model_sum
+```{r message=F, fig.width=6, fig.height=3}
+p6 <- dotplot(ranef(m1, condVar=T))[1]
+p6
 ```
-In addition, the within-group variance is 0.4397 and the cross-group variance is 0.1172, thus the correlation between two samples from same group is $\frac{0.1172}{0.1172+0.4397}=0.2104$ which is small.
+
+Based on the plot, the random intercept varies cross the labs. The Poulenc has the lowest uterus weight and ChungKor has the highest. This partly answers question 2.
+
+```{r, include=F}
+m1_summary
+```
+
+In addition, the within-group variance is 0.596379 and the cross-group variance is 0.185207, thus the correlation between two samples from same group is $\frac{0.185207}{0.185207+0.596379}=0.2370$ which is small.
 
 ## Residual and Sensitivity Analysis
 
-```{r}
-plot(model)
-qqnorm(resid(model))
-qqline(resid(model))
+```{r, fig.width=6, fig.height=3}
+par(mfrow=c(1,2))
+plot(fitted(m1), resid(m1), xlab = 'fitted', ylab='residual',
+     main='fitted vs. residual')
+abline(h=0)
+qqnorm(resid(m1))
+qqline(resid(m1))
 ```
 
-Based on the residual plots, the model violates the assumption of constant variance and normality. This is the limitations of the model.
+Based on the residual plots, the model exhibits violation of constant variance a bit, and it roughly follows normality.
 
+Next, I use DFBETAS to determine the influential labs.
 
-```{r}
-model.inf1 <- influence(model, "lab")
-kable(dfbetas(model.inf1), digits = 3, caption="dfbetas of labs")
+```{r warning=F}
+m1.inf1 <- influence(m1, "lab")
+kable(dfbetas(m1.inf1), digits = 3, caption="dfbetas of labs")
 ```
 
-The cutoff is $\frac{2}{\sqrt{19}} = 0.459$, the overly influential observations are lab Huntingd and Poulenc.
+The cutoff is $\frac{2}{\sqrt{19}} = 0.459$, based on DFBETAS there is no influntial labs on the random effects.
 
-
-```{r}
-model.inf2 <- influence(model, "protocol")
-kable(dfbetas(model.inf2), digits = 3, caption="dfbetas of protocol")
-plot(model.inf2, which="dfbetas")
-kable(cooks.distance(model.inf2, sort=T),digits = 3, caption = "Cook's distance of protocol")
+```{r, fig.width=4, fig.height=4}
+plot(m1.inf1, which="cook", cutoff=4/length(unique(data$lab)), sort=T, xlab="Cook's D", ylab='lab')
 ```
 
-As for protocol, the cutoff is $\frac{2}{\sqrt{19}} = 1$, thus only protocol D is not influential based on dfbetas. It also has the smallest Cook's distance. Thus I recommend to use protocol D for detecting effects of EE and ZM.
+As for the Cook's distance, lab ChungKor is the largest, but it is too small to be claimed as influential. For this reason, there is no lab that appears to be outlier. This answers question 2.
+
+```{r, fig.width=4, fig.height=4}
+m1.inf2 <- influence(m1, "protocol")
+kable(dfbetas(m1.inf2), digits = 3, caption="dfbetas of protocol")
+plot(m1.inf2, which="cook", cutoff=4/length(unique(data$lab)), sort=T, xlab="Cook's D", ylab='lab')
+```
+
+As for protocol, the cutoff is $\frac{2}{\sqrt{4}} = 1$, thus protocol A is influential in random effect of ZM and protocol C is influential in random effect of C (-0.994 is close to threshold 1). Protocol D has small DFBETAS on average and also has the smallest Cook's distance. Thus I recommend to use protocol D for detecting effects of EE and ZM. This answers question 3.
+
+## Limits
+
+The limits of the model might be the violation of constant variance. Also I am not able to create a nested model due to the small sample size.
 
 # Appendix
 
